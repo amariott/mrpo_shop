@@ -1,7 +1,53 @@
 {% extends "base.html" %}
 
 {% block content %}
-    <div class="info-block">
-        Раздел заказов будет сделан следующим шагом.
+    {% if can_manage_orders %}
+        <div class="toolbar">
+            <a class="button" href="{{ url_for('create_order') }}">Добавить заказ</a>
+        </div>
+    {% endif %}
+
+    <div class="order-list">
+        {% for order in orders %}
+            <article class="order-card">
+                <div class="order-left">
+                    {% if can_manage_orders %}
+                        <a class="product-title-link" href="{{ url_for('edit_order', order_id=order['id']) }}">
+                            Артикул заказа: {{ order['articles_text'] }}
+                        </a>
+                    {% else %}
+                        <h2 class="product-title">Артикул заказа: {{ order['articles_text'] }}</h2>
+                    {% endif %}
+
+                    <p><strong>Статус заказа:</strong> {{ order['status_name'] }}</p>
+                    <p><strong>Адрес пункта выдачи:</strong> {{ order['pickup_address'] }}</p>
+                    <p><strong>Дата заказа:</strong> {{ order['order_date'] }}</p>
+                    <p><strong>Клиент:</strong> {{ order['client_full_name'] }}</p>
+                </div>
+
+                <div class="order-right">
+                    <p><strong>Дата выдачи:</strong></p>
+                    <p>{{ order['delivery_date'] }}</p>
+                </div>
+            </article>
+
+            {% if can_manage_orders %}
+                <div class="card-actions">
+                    <form
+                        method="post"
+                        action="{{ url_for('delete_order', order_id=order['id']) }}"
+                        onsubmit="return confirm('Удалить заказ без возможности восстановления?');"
+                    >
+                        <button type="submit" class="button button-small danger-button">
+                            Удалить заказ
+                        </button>
+                    </form>
+                </div>
+            {% endif %}
+        {% else %}
+            <div class="empty-block">
+                Заказы не найдены.
+            </div>
+        {% endfor %}
     </div>
 {% endblock %}

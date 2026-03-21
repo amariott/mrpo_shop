@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <div class="toolbar">
+        <a class="button secondary-button" href="{{ url_for('orders') }}">Назад</a>
+    </div>
+
+    <form method="post" class="form-card">
+        {% if order %}
+            <label for="order_id">ID</label>
+            <input id="order_id" type="text" value="{{ order['id'] }}" readonly>
+        {% endif %}
+
+        <label for="articles">Артикул</label>
+        <input
+            id="articles"
+            name="articles"
+            type="text"
+            value="{{ order['articles_raw'] if order else '' }}"
+            required
+        >
+        <p class="hint-text">
+            Можно ввести один артикул или несколько через запятую.
+            Для количества: А112Т4, 2, F635R4, 1
+        </p>
+
+        <label for="status_id">Статус заказа</label>
+        <select id="status_id" name="status_id" required>
+            <option value="">Выберите статус</option>
+            {% for status in statuses %}
+                <option
+                    value="{{ status['id'] }}"
+                    {% if order and order['status_id'] == status['id'] %}selected{% endif %}
+                >
+                    {{ status['name'] }}
+                </option>
+            {% endfor %}
+        </select>
+
+        <label for="pickup_address">Адрес пункта выдачи</label>
+        <input
+            id="pickup_address"
+            name="pickup_address"
+            list="pickup_addresses"
+            type="text"
+            value="{{ order['pickup_address'] if order else '' }}"
+            required
+        >
+        <datalist id="pickup_addresses">
+            {% for point in pickup_points %}
+                <option value="{{ point['address'] }}"></option>
+            {% endfor %}
+        </datalist>
+
+        <label for="order_date">Дата заказа</label>
+        <input
+            id="order_date"
+            name="order_date"
+            type="date"
+            value="{{ order['order_date'] if order else '' }}"
+            required
+        >
+
+        <label for="delivery_date">Дата выдачи</label>
+        <input
+            id="delivery_date"
+            name="delivery_date"
+            type="date"
+            value="{{ order['delivery_date'] if order else '' }}"
+            required
+        >
+
+        <button type="submit" class="button">{{ form_title }}</button>
+    </form>
+{% endblock %}

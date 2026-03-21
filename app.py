@@ -164,6 +164,158 @@ def get_or_create_reference(connection, table_name, name):
     return cursor.lastrowid
 
 
+def can_manage_orders():
+    return get_current_role() == "admin"
+
+
+def get_or_create_pickup_point_id(connection, address):
+    normalized_address = (address or "").strip()
+
+    if not normalized_address:
+        raise ValueError("Укажите адрес пункта выдачи.")
+
+    row = connection.execute(
+        "SELECT id FROM pickup_points WHERE address = ?",
+        (normalized_address,),
+    ).fetchone()
+
+    if row is not None:
+        return row["id"]
+
+    next_id = connection.execute(
+        "SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM pickup_points"
+    ).fetchone()["next_id"]
+
+    connection.execute(
+        "INSERT INTO pickup_points (id, address) VALUES (?, ?)",
+        (next_id, normalized_address),
+    )
+    return next_id
+
+
+def get_default_client_id(connection):
+    users = connection.execute(
+        """
+        SELECT users.id, roles.name AS role_name
+        FROM users
+        JOIN roles ON roles.id = users.role_id
+        ORDER BY users.id
+        """
+    ).fetchall()
+
+    for user in users:
+        if normalize_role_name(user["role_name"]) == "client":
+            return user["id"]
+
+    if users:
+        return users[0]["id"]
+
+    raise ValueError("В базе данных нет пользователей.")
+
+
+def get_next_pickup_code(connection):
+    rows = connection.execute("SELECT pickup_code FROM orders").fetchall()
+    max_code = 900
+
+    for row in rows:
+        raw_code = str(row["pickup_code"]).strip()
+        if raw_code.isdigit():
+            max_code = max(max_code, int(raw_code))
+
+    return str(max_code + 1)
+
+
+def parse_articles_field(raw_value):
+    parts = [
+        part.strip()
+        for part in (raw_value or "").split(",")
+        if part.strip()
+    ]
+
+    if not parts:
+        raise ValueError("Укажите артикул товара.")
+
+    if len(parts) == 1:
+        return [(parts[0], 1)]
+
+    is_pairs = len(parts) % 2 == 0
+
+    if is_pairs:
+        for index in range(1, len(parts), 2):
+            if not parts[index].isdigit():
+                is_pairs = False
+                break
+
+    if is_pairs:
+        result = []
+
+        for index in range(0, len(parts), 2):
+            quantity = int(parts[index + 1])
+
+            if quantity <= 0:
+                raise ValueError(
+                    "Количество товара в заказе должно быть больше нуля."
+                )
+
+            result.append((parts[index], quantity))
+
+        return result
+
+    return [(part, 1) for part in parts]
+
+
+def build_order_items_payload(connection, raw_articles):
+    quantities_by_product = {}
+
+    for article, quantity in parse_articles_field(raw_articles):
+        product = connection.execute(
+            "SELECT id FROM products WHERE article = ?",
+            (article,),
+        ).fetchone()
+
+        if product is None:
+            raise ValueError(f"Товар с артикулом {article} не найден.")
+
+        product_id = product["id"]
+        quantities_by_product[product_id] = (
+            quantities_by_product.get(product_id, 0) + quantity
+        )
+
+    return list(quantities_by_product.items())
+
+
+def get_order_or_404(order_id):
+    order = get_db().execute(
+        """
+        SELECT
+            o.id,
+            o.user_id,
+            o.pickup_point_id,
+            o.pickup_code,
+            o.status_id,
+            o.order_date,
+            o.delivery_date,
+            os.name AS status_name,
+            pp.address AS pickup_address,
+            GROUP_CONCAT(p.article || ', ' || oi.quantity, ', ') AS articles_raw
+        FROM orders o
+        JOIN order_statuses os ON os.id = o.status_id
+        JOIN pickup_points pp ON pp.id = o.pickup_point_id
+        JOIN order_items oi ON oi.order_id = o.id
+        JOIN products p ON p.id = oi.product_id
+        WHERE o.id = ?
+        GROUP BY o.id
+        """,
+        (order_id,),
+    ).fetchone()
+
+    if order is None:
+        flash("Заказ не найден.", "error")
+        return None
+
+    return order
+
+
 def get_product_or_404(product_id):
     product = get_db().execute(
         """
@@ -208,6 +360,7 @@ def inject_template_data():
         "can_use_advanced_tools": can_use_advanced_tools(),
         "can_manage_products": can_manage_products(),
         "can_view_orders": can_view_orders(),
+        "can_manage_orders": can_manage_orders(),
     }
 
 
@@ -651,10 +804,279 @@ def delete_product(product_id):
 @app.route("/orders")
 @require_roles("manager", "admin")
 def orders():
+    connection = get_db()
+
+    orders_rows = connection.execute(
+        """
+        SELECT
+            o.id,
+            o.order_date,
+            o.delivery_date,
+            o.pickup_code,
+            os.name AS status_name,
+            pp.address AS pickup_address,
+            u.full_name AS client_full_name,
+            GROUP_CONCAT(p.article || ' × ' || oi.quantity, ', ') AS articles_text
+        FROM orders o
+        JOIN users u ON u.id = o.user_id
+        JOIN pickup_points pp ON pp.id = o.pickup_point_id
+        JOIN order_statuses os ON os.id = o.status_id
+        JOIN order_items oi ON oi.order_id = o.id
+        JOIN products p ON p.id = oi.product_id
+        GROUP BY o.id
+        ORDER BY o.id
+        """
+    ).fetchall()
+
     return render_template(
         "orders.html",
         title="Заказы",
+        orders=orders_rows,
     )
+
+
+@app.route("/orders/new", methods=["GET", "POST"])
+@require_roles("admin")
+def create_order():
+    connection = get_db()
+
+    statuses = connection.execute(
+        "SELECT id, name FROM order_statuses ORDER BY name"
+    ).fetchall()
+    pickup_points = connection.execute(
+        "SELECT id, address FROM pickup_points ORDER BY address"
+    ).fetchall()
+
+    if request.method == "POST":
+        try:
+            articles = request.form.get("articles", "").strip()
+            status_id = request.form.get("status_id", type=int)
+            pickup_address = request.form.get("pickup_address", "").strip()
+            order_date = request.form.get("order_date", "").strip()
+            delivery_date = request.form.get("delivery_date", "").strip()
+
+            if not articles:
+                raise ValueError("Укажите артикул товара.")
+            if status_id is None:
+                raise ValueError("Выберите статус заказа.")
+            if not pickup_address:
+                raise ValueError("Укажите адрес пункта выдачи.")
+            if not order_date:
+                raise ValueError("Укажите дату заказа.")
+            if not delivery_date:
+                raise ValueError("Укажите дату выдачи.")
+
+            order_items = build_order_items_payload(connection, articles)
+            pickup_point_id = get_or_create_pickup_point_id(
+                connection,
+                pickup_address,
+            )
+            user_id = get_default_client_id(connection)
+            pickup_code = get_next_pickup_code(connection)
+            next_order_id = connection.execute(
+                "SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM orders"
+            ).fetchone()["next_id"]
+
+            connection.execute(
+                """
+                INSERT INTO orders (
+                    id,
+                    user_id,
+                    pickup_point_id,
+                    pickup_code,
+                    status_id,
+                    order_date,
+                    delivery_date
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    next_order_id,
+                    user_id,
+                    pickup_point_id,
+                    pickup_code,
+                    status_id,
+                    order_date,
+                    delivery_date,
+                ),
+            )
+
+            for product_id, quantity in order_items:
+                connection.execute(
+                    """
+                    INSERT INTO order_items (order_id, product_id, quantity)
+                    VALUES (?, ?, ?)
+                    """,
+                    (
+                        next_order_id,
+                        product_id,
+                        quantity,
+                    ),
+                )
+
+            connection.commit()
+            flash("Заказ успешно добавлен.", "success")
+            return redirect(url_for("orders"))
+
+        except ValueError as error:
+            connection.rollback()
+            flash(str(error), "error")
+        except sqlite3.IntegrityError:
+            connection.rollback()
+            flash(
+                "Не удалось сохранить заказ. Проверьте введённые данные.",
+                "error",
+            )
+        except Exception:
+            connection.rollback()
+            flash(
+                "Произошла ошибка при добавлении заказа.",
+                "error",
+            )
+
+    return render_template(
+        "order_form.html",
+        title="Добавление заказа",
+        form_title="Добавление заказа",
+        order=None,
+        statuses=statuses,
+        pickup_points=pickup_points,
+    )
+
+
+@app.route("/orders/<int:order_id>/edit", methods=["GET", "POST"])
+@require_roles("admin")
+def edit_order(order_id):
+    connection = get_db()
+    order = get_order_or_404(order_id)
+
+    if order is None:
+        return redirect(url_for("orders"))
+
+    statuses = connection.execute(
+        "SELECT id, name FROM order_statuses ORDER BY name"
+    ).fetchall()
+    pickup_points = connection.execute(
+        "SELECT id, address FROM pickup_points ORDER BY address"
+    ).fetchall()
+
+    if request.method == "POST":
+        try:
+            articles = request.form.get("articles", "").strip()
+            status_id = request.form.get("status_id", type=int)
+            pickup_address = request.form.get("pickup_address", "").strip()
+            order_date = request.form.get("order_date", "").strip()
+            delivery_date = request.form.get("delivery_date", "").strip()
+
+            if not articles:
+                raise ValueError("Укажите артикул товара.")
+            if status_id is None:
+                raise ValueError("Выберите статус заказа.")
+            if not pickup_address:
+                raise ValueError("Укажите адрес пункта выдачи.")
+            if not order_date:
+                raise ValueError("Укажите дату заказа.")
+            if not delivery_date:
+                raise ValueError("Укажите дату выдачи.")
+
+            order_items = build_order_items_payload(connection, articles)
+            pickup_point_id = get_or_create_pickup_point_id(
+                connection,
+                pickup_address,
+            )
+
+            connection.execute(
+                """
+                UPDATE orders
+                SET
+                    pickup_point_id = ?,
+                    status_id = ?,
+                    order_date = ?,
+                    delivery_date = ?
+                WHERE id = ?
+                """,
+                (
+                    pickup_point_id,
+                    status_id,
+                    order_date,
+                    delivery_date,
+                    order_id,
+                ),
+            )
+
+            connection.execute(
+                "DELETE FROM order_items WHERE order_id = ?",
+                (order_id,),
+            )
+
+            for product_id, quantity in order_items:
+                connection.execute(
+                    """
+                    INSERT INTO order_items (order_id, product_id, quantity)
+                    VALUES (?, ?, ?)
+                    """,
+                    (
+                        order_id,
+                        product_id,
+                        quantity,
+                    ),
+                )
+
+            connection.commit()
+            flash("Заказ успешно обновлён.", "success")
+            return redirect(url_for("orders"))
+
+        except ValueError as error:
+            connection.rollback()
+            flash(str(error), "error")
+        except sqlite3.IntegrityError:
+            connection.rollback()
+            flash(
+                "Не удалось сохранить изменения заказа.",
+                "error",
+            )
+        except Exception:
+            connection.rollback()
+            flash(
+                "Произошла ошибка при редактировании заказа.",
+                "error",
+            )
+
+    return render_template(
+        "order_form.html",
+        title="Редактирование заказа",
+        form_title="Редактирование заказа",
+        order=order,
+        statuses=statuses,
+        pickup_points=pickup_points,
+    )
+
+
+@app.route("/orders/<int:order_id>/delete", methods=["POST"])
+@require_roles("admin")
+def delete_order(order_id):
+    connection = get_db()
+    order = get_order_or_404(order_id)
+
+    if order is None:
+        return redirect(url_for("orders"))
+
+    try:
+        connection.execute(
+            "DELETE FROM order_items WHERE order_id = ?",
+            (order_id,),
+        )
+        connection.execute(
+            "DELETE FROM orders WHERE id = ?",
+            (order_id,),
+        )
+        connection.commit()
+        flash("Заказ успешно удалён.", "success")
+    except Exception:
+        connection.rollback()
+        flash("Произошла ошибка при удалении заказа.", "error")
+
+    return redirect(url_for("orders"))
 
 
 if __name__ == "__main__":
