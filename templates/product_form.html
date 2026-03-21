@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <div class="toolbar">
+        <a class="button secondary-button" href="{{ url_for('products') }}">Назад</a>
+    </div>
+
+    <form method="post" enctype="multipart/form-data" class="form-card">
+        {% if product %}
+            <label for="product_id">ID</label>
+            <input id="product_id" type="text" value="{{ product['id'] }}" readonly>
+        {% endif %}
+
+        <label for="article">Артикул</label>
+        <input
+            id="article"
+            name="article"
+            type="text"
+            value="{{ product['article'] if product else '' }}"
+            required
+        >
+
+        <label for="name">Наименование товара</label>
+        <input
+            id="name"
+            name="name"
+            type="text"
+            value="{{ product['name'] if product else '' }}"
+            required
+        >
+
+        <label for="category_id">Категория</label>
+        <select id="category_id" name="category_id" required>
+            <option value="">Выберите категорию</option>
+            {% for category in categories %}
+                <option
+                    value="{{ category['id'] }}"
+                    {% if product and product['category_id'] == category['id'] %}selected{% endif %}
+                >
+                    {{ category['name'] }}
+                </option>
+            {% endfor %}
+        </select>
+
+        <label for="description">Описание</label>
+        <textarea id="description" name="description" rows="4">{{ product['description'] if product else '' }}</textarea>
+
+        <label for="manufacturer_id">Производитель</label>
+        <select id="manufacturer_id" name="manufacturer_id" required>
+            <option value="">Выберите производителя</option>
+            {% for manufacturer in manufacturers %}
+                <option
+                    value="{{ manufacturer['id'] }}"
+                    {% if product and product['manufacturer_id'] == manufacturer['id'] %}selected{% endif %}
+                >
+                    {{ manufacturer['name'] }}
+                </option>
+            {% endfor %}
+        </select>
+
+        <label for="supplier_name">Поставщик</label>
+        <input
+            id="supplier_name"
+            name="supplier_name"
+            list="supplier_list"
+            type="text"
+            value="{{ product['supplier_name'] if product else '' }}"
+            required
+        >
+        <datalist id="supplier_list">
+            {% for supplier in suppliers %}
+                <option value="{{ supplier['name'] }}"></option>
+            {% endfor %}
+        </datalist>
+
+        <label for="price">Цена</label>
+        <input
+            id="price"
+            name="price"
+            type="number"
+            step="0.01"
+            min="0"
+            value="{{ product['price'] if product else '0' }}"
+            required
+        >
+
+        <label for="unit">Единица измерения</label>
+        <input
+            id="unit"
+            name="unit"
+            type="text"
+            value="{{ product['unit'] if product else '' }}"
+            required
+        >
+
+        <label for="stock">Количество на складе</label>
+        <input
+            id="stock"
+            name="stock"
+            type="number"
+            min="0"
+            value="{{ product['stock'] if product else '0' }}"
+            required
+        >
+
+        <label for="discount">Скидка</label>
+        <input
+            id="discount"
+            name="discount"
+            type="number"
+            min="0"
+            max="100"
+            value="{{ product['discount'] if product else '0' }}"
+            required
+        >
+
+        <label for="photo">Фото товара</label>
+        <input id="photo" name="photo" type="file" accept=".png,.jpg,.jpeg,.gif,.webp,.bmp">
+
+        <div class="preview-block">
+            <img
+                src="{{ url_for('static', filename=product['photo_path'] if product and product['photo_path'] else 'images/picture.png') }}"
+                alt="Фото товара"
+                class="preview-image"
+            >
+        </div>
+
+        <button type="submit" class="button">{{ form_title }}</button>
+    </form>
+{% endblock %}

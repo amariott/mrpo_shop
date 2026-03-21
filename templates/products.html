@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+
+{% block content %}
+    {% if can_use_advanced_tools %}
+        <form id="live-form" method="get" class="filter-panel">
+            <div class="filter-row">
+                <div class="filter-item">
+                    <label for="search">Поиск</label>
+                    <input
+                        id="search"
+                        type="text"
+                        name="search"
+                        value="{{ search_text }}"
+                        placeholder="Введите текст"
+                    >
+                </div>
+
+                <div class="filter-item">
+                    <label for="supplier_id">Поставщик</label>
+                    <select id="supplier_id" name="supplier_id">
+                        <option value="all" {% if supplier_id == "all" %}selected{% endif %}>
+                            Все поставщики
+                        </option>
+                        {% for supplier in suppliers %}
+                            <option
+                                value="{{ supplier['id'] }}"
+                                {% if supplier_id|string == supplier['id']|string %}selected{% endif %}
+                            >
+                                {{ supplier['name'] }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="filter-item">
+                    <label for="stock_sort">Сортировка по остатку</label>
+                    <select id="stock_sort" name="stock_sort">
+                        <option value="" {% if stock_sort == "" %}selected{% endif %}>
+                            Без сортировки
+                        </option>
+                        <option value="asc" {% if stock_sort == "asc" %}selected{% endif %}>
+                            По возрастанию
+                        </option>
+                        <option value="desc" {% if stock_sort == "desc" %}selected{% endif %}>
+                            По убыванию
+                        </option>
+                    </select>
+                </div>
+            </div>
+        </form>
+    {% endif %}
+
+    {% if can_manage_products %}
+        <div class="toolbar">
+            <a class="button" href="{{ url_for('create_product') }}">Добавить товар</a>
+        </div>
+    {% endif %}
+
+    <div class="product-list">
+        {% for product in products %}
+            {% set final_price = product['price'] * (100 - product['discount']) / 100 %}
+            <article
+                class="
+                    product-card
+                    {% if product['stock'] == 0 %} out-of-stock{% endif %}
+                    {% if product['discount'] > 15 %} high-discount{% endif %}
+                "
+            >
+                <div class="product-image-block">
+                    <img
+                        src="{{ url_for('static', filename=product['photo_path'] or 'images/picture.png') }}"
+                        alt="{{ product['name'] }}"
+                        class="product-image"
+                    >
+                </div>
+
+                <div class="product-content">
+                    <div class="product-header">
+                        {% if can_manage_products %}
+                            <a class="product-title-link" href="{{ url_for('edit_product', product_id=product['id']) }}">
+                                {{ product['name'] }}
+                            </a>
+                        {% else %}
+                            <h2 class="product-title">{{ product['name'] }}</h2>
+                        {% endif %}
+                    </div>
+
+                    <p><strong>Артикул:</strong> {{ product['article'] }}</p>
+                    <p><strong>Категория:</strong> {{ product['category_name'] }}</p>
+                    <p><strong>Описание:</strong> {{ product['description'] }}</p>
+                    <p><strong>Производитель:</strong> {{ product['manufacturer_name'] }}</p>
+                    <p><strong>Поставщик:</strong> {{ product['supplier_name'] }}</p>
+                    <p><strong>Единица измерения:</strong> {{ product['unit'] }}</p>
+                    <p><strong>Количество на складе:</strong> {{ product['stock'] }}</p>
+                    <p><strong>Скидка:</strong> {{ product['discount'] }}%</p>
+
+                    <div class="price-block">
+                        {% if product['discount'] > 0 %}
+                            <span class="old-price">{{ "%.2f"|format(product['price']) }} ₽</span>
+                            <span class="new-price">{{ "%.2f"|format(final_price) }} ₽</span>
+                        {% else %}
+                            <span class="new-price">{{ "%.2f"|format(product['price']) }} ₽</span>
+                        {% endif %}
+                    </div>
+
+                    {% if can_manage_products %}
+                        <div class="card-actions">
+                            <a class="button button-small" href="{{ url_for('edit_product', product_id=product['id']) }}">
+                                Редактировать
+                            </a>
+
+                            <form
+                                method="post"
+                                action="{{ url_for('delete_product', product_id=product['id']) }}"
+                                onsubmit="return confirm('Удалить товар без возможности восстановления?');"
+                            >
+                                <button type="submit" class="button button-small danger-button">
+                                    Удалить
+                                </button>
+                            </form>
+                        </div>
+                    {% endif %}
+                </div>
+            </article>
+        {% else %}
+            <div class="empty-block">
+                Ничего не найдено.
+            </div>
+        {% endfor %}
+    </div>
+
+    {% if can_use_advanced_tools %}
+        <script>
+            const liveForm = document.getElementById("live-form");
+            const searchInput = document.getElementById("search");
+            const supplierSelect = document.getElementById("supplier_id");
+            const stockSortSelect = document.getElementById("stock_sort");
+
+            let timerId = null;
+
+            if (searchInput) {
+                searchInput.addEventListener("input", function () {
+                    clearTimeout(timerId);
+                    timerId = setTimeout(function () {
+                        liveForm.submit();
+                    }, 300);
+                });
+            }
+
+            if (supplierSelect) {
+                supplierSelect.addEventListener("change", function () {
+                    liveForm.submit();
+                });
+            }
+
+            if (stockSortSelect) {
+                stockSortSelect.addEventListener("change", function () {
+                    liveForm.submit();
+                });
+            }
+        </script>
+    {% endif %}
+{% endblock %}
