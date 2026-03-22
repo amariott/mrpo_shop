@@ -5,7 +5,7 @@
         <a class="button secondary-button" href="{{ url_for('products') }}">Назад</a>
     </div>
 
-    <form method="post" enctype="multipart/form-data" class="form-card">
+    <form id="product-form" method="post" enctype="multipart/form-data" class="form-card">
         {% if product %}
             <label for="product_id">ID</label>
             <input id="product_id" type="text" value="{{ product['id'] }}" readonly>
@@ -127,4 +127,46 @@
 
         <button type="submit" class="button">{{ form_title }}</button>
     </form>
+    {% if product %}
+    <script>
+        const lockKey = "product_edit_lock";
+        const currentProductId = "{{ product['id'] }}";
+        const currentTime = Date.now();
+        const rawLock = localStorage.getItem(lockKey);
+
+        if (rawLock) {
+            try {
+                const lockData = JSON.parse(rawLock);
+
+                // Не даем открыть вторую вкладку редактирования товара в одном браузере.
+                if (currentTime - lockData.created_at < 30 * 60 * 1000) {
+                    alert("Уже открыто окно редактирования товара. Сначала закройте его.");
+                    window.location.href = "{{ url_for('products') }}";
+                }
+            } catch (error) {
+                localStorage.removeItem(lockKey);
+            }
+        }
+
+        localStorage.setItem(
+            lockKey,
+            JSON.stringify({
+                product_id: currentProductId,
+                created_at: currentTime
+            })
+        );
+
+        window.addEventListener("beforeunload", function () {
+            localStorage.removeItem(lockKey);
+        });
+
+        const productForm = document.getElementById("product-form");
+
+        if (productForm) {
+            productForm.addEventListener("submit", function () {
+                localStorage.removeItem(lockKey);
+            });
+        }
+    </script>
+{% endif %}
 {% endblock %}

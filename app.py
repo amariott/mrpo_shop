@@ -3,6 +3,7 @@ import os
 import sqlite3
 from functools import wraps
 from pathlib import Path
+from PIL import Image
 
 from flask import (
     Flask,
@@ -14,7 +15,6 @@ from flask import (
     session,
     url_for,
 )
-from werkzeug.utils import secure_filename
 
 
 BASE_DIR = Path(__file__).parent
@@ -118,6 +118,16 @@ def allowed_file(file_name):
     return extension in ALLOWED_EXTENSIONS
 
 
+def delete_product_photo(photo_path):
+    if not photo_path or photo_path == "images/picture.png":
+        return
+
+    file_path = BASE_DIR / "static" / photo_path
+
+    if file_path.exists() and file_path.is_file():
+        file_path.unlink()
+
+
 def save_uploaded_photo(file_storage):
     if file_storage is None or not file_storage.filename:
         return None
@@ -130,10 +140,17 @@ def save_uploaded_photo(file_storage):
 
     UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 
-    extension = Path(secure_filename(file_storage.filename)).suffix.lower()
-    file_name = f"product_{os.urandom(8).hex()}{extension}"
+    file_storage.stream.seek(0)
+    image = Image.open(file_storage.stream)
+
+    image.thumbnail((300, 200))
+
+    if image.mode not in {"RGB", "RGBA"}:
+        image = image.convert("RGB")
+
+    file_name = f"product_{os.urandom(8).hex()}.png"
     file_path = UPLOAD_FOLDER / file_name
-    file_storage.save(file_path)
+    image.save(file_path, format="PNG", optimize=True)
 
     return f"images/products/{file_name}"
 
@@ -704,7 +721,11 @@ def edit_product(product_id):
             uploaded_file = request.files.get("photo")
 
             if uploaded_file is not None and uploaded_file.filename:
+                old_photo_path = photo_path
                 photo_path = save_uploaded_photo(uploaded_file)
+
+                if old_photo_path and old_photo_path != photo_path:
+                    delete_product_photo(old_photo_path)
 
             connection.execute(
                 """
@@ -782,8 +803,12 @@ def delete_product(product_id):
         return redirect(url_for("products"))
 
     try:
+        photo_path = product["photo_path"]
+
         connection.execute("DELETE FROM products WHERE id = ?", (product_id,))
         connection.commit()
+
+        delete_product_photo(photo_path)
         flash("Товар успешно удалён.", "success")
     except sqlite3.IntegrityError:
         connection.rollback()
